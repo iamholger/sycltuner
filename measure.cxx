@@ -154,7 +154,7 @@ int main(int argc, char* argv[])
     Tuner t_strider2(max_local_wg_size, NPT, (unknowns+aux)*numVPAIP, numVPAIP);
     t_strider2.tune(Q, 1, srcPS, destPS ,Xin, Xout, true, &strider2<NPT,numVPAIP,unknowns,aux>);
     std::cerr << t_strider2 << "\n";
-    t_fcompute.dump("strider2", ofs);
+    t_strider2.dump("strider2", ofs);
 
     ofs.close();
 
