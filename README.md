@@ -2,7 +2,7 @@
 
 The code runs through all possible kernel shapes for a fixed
 problem size and architecture. The measurement of the excution time
-is repeadted until sufficiently precise (10% relative error).
+is repeaded until sufficiently precise (10% relative error by default).
 
 dpcpp measure.cxx -I. 
 
