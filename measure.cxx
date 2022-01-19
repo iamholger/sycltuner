@@ -2,6 +2,7 @@
 #include <cmath>
 #include <vector>
 #include <iostream>
+#include <fstream>
 
 #include "comparisonlib.h"
 
@@ -11,12 +12,12 @@ struct Record
 
     Record(const size_t gx, const size_t gy, const size_t gz) : x(0), xsq(0), n(0), GX(gx), GY(gy), GZ(gz) {};
 
-    double mean() {return x/n;}
+    constexpr double mean() const {return x/n;}
 
     // Weighted variance defined as
     // sig2 = ( sum(wx**2) * sum(w) - sum(wx)**2 ) / ( sum(w)**2 - sum(w**2) )
     // see http://en.wikipedia.org/wiki/Weighted_mean --- all weights == 1
-    double stddev() {
+    constexpr double stddev() const {
         return sqrt( (n*xsq - x*x)/double(n*n -n)) / n;
     }
 
@@ -30,16 +31,18 @@ struct Record
         fn(Q, haloSize, sourcePatchSize, destPatchSize, Qin, Qout, skipSourceTerm, GX, GY, GZ);
         auto end = std::chrono::steady_clock::now();
 
-        double measurement = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+        double measurement = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
 
         x   += measurement;
         xsq += measurement*measurement;
         n++;
     }
 
-    void toCSV()
+    std::string const toCSV()
     {
-        printf("%zu,%zu,%zu,%f,%f\n",GX,GY,GZ,this->mean(),this->stddev());
+      std::ostringstream s;
+      s << GX << "," << GY << "," << GZ << "," << this->mean() << "," << this->stddev();
+      return s.str();
     }
 };
 
@@ -74,7 +77,7 @@ struct Tuner
     friend std::ostream& operator<<(std::ostream& os, const Tuner& tr)
     {
       auto win = tr.records_[tr.winner_];
-      return os << "Fastest time: " << tr.besttime_ << " ns with WG sizes {" << win.GX << ","  << win.GY << "," << win.GZ << "}\n";
+      return os << "Fastest time: " << tr.besttime_ << " +/- " << win.stddev() << " microseconds with WG sizes {" << win.GX << ","  << win.GY << "," << win.GZ << "}\n";
     }
 
     void tune(queue& Q, const int haloSize, const int sourcePatchSize, const int destPatchSize, double * Qin, double * Qout, bool skipSourceTerm,
@@ -82,7 +85,7 @@ struct Tuner
         double tol=0.1, int mineval=6)
     {
         double relerr;
-        printf("Got %zu variations\n", sizes_.size());
+        std::cerr << "Got " << sizes_.size() << " variations\n";
 
         for (int i=0;i<sizes_.size();i++)
         {
@@ -103,12 +106,20 @@ struct Tuner
             }
         }
     }
+
+    void dump(const std::string name, std::ofstream& ofs)
+    {
+      for (auto r : records_)
+      {
+        ofs << r.toCSV() << "," << name << "\n";
+      }
+    }
 };
 
 
 int main(int argc, char* argv[])
 {
-    std::cout << "  Using SYCL device: " << Q.get_device().get_info<sycl::info::device::name>() << std::endl;
+    std::cerr << "  Using SYCL device: " << Q.get_device().get_info<sycl::info::device::name>() << std::endl;
 
     Q.submit([&](handler &cgh)
     { 
@@ -125,16 +136,27 @@ int main(int argc, char* argv[])
     const int aux=0;
     const int srcPS = (numVPAIP+2)*(numVPAIP+2)*unknowns;
     const int destPS = numVPAIP*numVPAIP*unknowns;
+    const int max_local_wg_size(std::atoi(argv[1]));
     
     auto Xin  = malloc_shared<double>(srcPS*NPT, Q);
     for (int i=0;i<srcPS*NPT;i++) Xin[i] = unif(re);
     auto Xout = malloc_shared<double>(destPS*NPT, Q);
 
-    Tuner t_fcompute(1024, NPT,numVPAIP,numVPAIP);
+    std::ofstream ofs("data.csv", std::ofstream::out);
+    ofs << "GX,GY,GZ,mu,sigma,name\n";
+
+
+    Tuner t_fcompute(max_local_wg_size, NPT,numVPAIP,numVPAIP);
     t_fcompute.tune(Q, 1, srcPS, destPS ,Xin, Xout, true, &fcompute3<NPT,numVPAIP,unknowns,aux>);
-    std::cout << t_fcompute << "\n";
+    std::cerr << t_fcompute << "\n";
+    t_fcompute.dump("fcompute3", ofs);
     
-    Tuner t_strider2(1024, NPT, (unknowns+aux)*numVPAIP, numVPAIP);
+    Tuner t_strider2(max_local_wg_size, NPT, (unknowns+aux)*numVPAIP, numVPAIP);
     t_strider2.tune(Q, 1, srcPS, destPS ,Xin, Xout, true, &strider2<NPT,numVPAIP,unknowns,aux>);
-    std::cout << t_strider2 << "\n";
+    std::cerr << t_strider2 << "\n";
+    t_fcompute.dump("strider2", ofs);
+
+    ofs.close();
+
+    return 0;
 }
